@@ -1,340 +1,229 @@
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Objects;
-import java.util.logging.Logger;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * Represents a single block in the blockchain.
- * Each block contains transaction data, timestamp, and cryptographic hash.
- */
 class Block {
-    private static final Logger LOGGER = Logger.getLogger(Block.class.getName());
 
-    private final String data;
+    public enum MiningStatus { PENDING, MINING, MINED }
+
     private final String previousHash;
-    private final long timeStamp;
+    private final long timestamp;
+    private final List<String> transactions;
+    private final int difficulty;
+
+    private String merkleRoot;
     private String hash;
-    private int nonce;
+    private long nonce;
     private MiningStatus status;
 
-    public enum MiningStatus {
-        PENDING,
-        MINING,
-        MINED
-    }
+    public Block(List<String> transactions, String previousHash, int difficulty) {
+        if (transactions == null || transactions.isEmpty())
+            throw new IllegalArgumentException("Transactions required");
+        if (previousHash == null)
+            throw new IllegalArgumentException("Previous hash required");
+        if (difficulty < 1)
+            throw new IllegalArgumentException("Difficulty must be >= 1");
 
-    /**
-     * Creates a new block with the given data and previous hash.
-     *
-     * @param data         Transaction data to store in the block
-     * @param previousHash Hash of the previous block in the chain
-     * @throws IllegalArgumentException if data or previousHash is null/empty
-     */
-    public Block(String data, String previousHash) {
-        validateInput(data, "Block data");
-        validateInput(previousHash, "Previous hash");
-
-        this.data         = data;
+        this.transactions = List.copyOf(transactions);
         this.previousHash = previousHash;
-        this.timeStamp    = Instant.now().toEpochMilli();
-        this.status       = MiningStatus.PENDING;
-        this.nonce        = 0;
-        this.hash         = calculateHash();
+        this.timestamp = Instant.now().toEpochMilli();
+        this.difficulty = difficulty;
+        this.merkleRoot = computeMerkleRoot(this.transactions);
+        this.hash = calculateHash();
+        this.status = MiningStatus.PENDING;
     }
 
-    /**
-     * Calculates the SHA-256 hash of the block's contents.
-     *
-     * @return Hexadecimal string representation of the hash
-     */
     public String calculateHash() {
-        return HashUtil.applySha256(
-            previousHash +
-            Long.toString(timeStamp) +
-            Integer.toString(nonce) +
-            data
+        return HashUtil.sha256(
+                previousHash +
+                timestamp +
+                nonce +
+                merkleRoot
         );
     }
 
-    /**
-     * Mines the block by finding a hash that meets the difficulty requirement.
-     *
-     * @param difficulty Number of leading zeros required in the hash
-     * @throws IllegalArgumentException if difficulty is less than 1
-     * @throws IllegalStateException    if block is already mined
-     */
-    public void mineBlock(int difficulty) {
-        if (difficulty < 1) {
-            throw new IllegalArgumentException("Difficulty must be at least 1");
-        }
-        if (status == MiningStatus.MINED) {
-            throw new IllegalStateException("Block has already been mined");
-        }
+    public void mine() {
+        if (status == MiningStatus.MINED)
+            throw new IllegalStateException("Already mined");
 
         status = MiningStatus.MINING;
-        String target      = String.join("", Collections.nCopies(difficulty, "0"));
-        long   startTime   = System.currentTimeMillis();
+        String target = "0".repeat(difficulty);
 
-        LOGGER.info(String.format("Starting mining with difficulty %d...", difficulty));
-
-        while (!hash.substring(0, difficulty).equals(target)) {
+        while (!hash.startsWith(target)) {
             nonce++;
             hash = calculateHash();
         }
 
-        long miningTime = System.currentTimeMillis() - startTime;
-        status          = MiningStatus.MINED;
-
-        LOGGER.info(String.format(
-            "Block mined! Hash: %s | Nonce: %d | Time: %dms",
-            hash, nonce, miningTime
-        ));
+        status = MiningStatus.MINED;
     }
 
-    // ── Validation ─────────────────────────────────────────────────────────────
+    public void mineAsync(int threads) {
+        if (status == MiningStatus.MINED)
+            throw new IllegalStateException("Already mined");
 
-    private void validateInput(String value, String fieldName) {
-        if (value == null || value.trim().isEmpty()) {
-            throw new IllegalArgumentException(fieldName + " cannot be null or empty");
-        }
-    }
+        status = MiningStatus.MINING;
+        String target = "0".repeat(difficulty);
 
-    // ── Getters ────────────────────────────────────────────────────────────────
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        AtomicBoolean found = new AtomicBoolean(false);
 
-    public String getHash()         { return hash;         }
-    public String getPreviousHash() { return previousHash; }
-    public String getData()         { return data;         }
-    public long   getTimeStamp()    { return timeStamp;    }
-    public int    getNonce()        { return nonce;        }
-    public MiningStatus getStatus() { return status;       }
-
-    @Override
-    public String toString() {
-        return String.format(
-            "Block{hash='%s', previousHash='%s', data='%s', " +
-            "timeStamp=%d, nonce=%d, status=%s}",
-            hash, previousHash, data, timeStamp, nonce, status
-        );
-    }
-
-    @Override
-    public boolean equals(Object obj) {
-        if (this == obj) return true;
-        if (!(obj instanceof Block)) return false;
-        Block other = (Block) obj;
-        return Objects.equals(hash, other.hash);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(hash);
-    }
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Utility class for cryptographic hash operations.
- */
-class HashUtil {
-
-    private HashUtil() {
-        // Prevent instantiation
-    }
-
-    /**
-     * Applies SHA-256 hashing to the given input string.
-     *
-     * @param input String to hash
-     * @return Hexadecimal SHA-256 hash
-     * @throws RuntimeException if SHA-256 algorithm is unavailable
-     */
-    public static String applySha256(String input) {
-        Objects.requireNonNull(input, "Input cannot be null");
-        try {
-            MessageDigest digest    = MessageDigest.getInstance("SHA-256");
-            byte[]        hashBytes = digest.digest(input.getBytes("UTF-8"));
-            StringBuilder hexString = new StringBuilder();
-
-            for (byte b : hashBytes) {
-                String hex = Integer.toHexString(0xff & b);
-                if (hex.length() == 1) {
-                    hexString.append('0');
+        for (int i = 0; i < threads; i++) {
+            final int threadId = i;
+            pool.submit(() -> {
+                long localNonce = threadId;
+                while (!found.get()) {
+                    String testHash = HashUtil.sha256(
+                            previousHash +
+                            timestamp +
+                            localNonce +
+                            merkleRoot
+                    );
+                    if (testHash.startsWith(target)) {
+                        if (found.compareAndSet(false, true)) {
+                            nonce = localNonce;
+                            hash = testHash;
+                        }
+                        break;
+                    }
+                    localNonce += threads;
                 }
-                hexString.append(hex);
-            }
-            return hexString.toString();
-
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to apply SHA-256 hashing", e);
+            });
         }
+
+        pool.shutdown();
+        try { pool.awaitTermination(10, TimeUnit.MINUTES); }
+        catch (InterruptedException ignored) {}
+
+        status = MiningStatus.MINED;
     }
+
+    private String computeMerkleRoot(List<String> txs) {
+        List<String> layer = txs.stream()
+                .map(HashUtil::sha256)
+                .toList();
+
+        while (layer.size() > 1) {
+            List<String> next = new ArrayList<>();
+            for (int i = 0; i < layer.size(); i += 2) {
+                String left = layer.get(i);
+                String right = (i + 1 < layer.size()) ? layer.get(i + 1) : left;
+                next.add(HashUtil.sha256(left + right));
+            }
+            layer = next;
+        }
+        return layer.get(0);
+    }
+
+    public boolean validate() {
+        if (!hash.equals(calculateHash())) return false;
+        if (!hash.startsWith("0".repeat(difficulty))) return false;
+        return true;
+    }
+
+    public String getHash() { return hash; }
+    public String getPreviousHash() { return previousHash; }
+    public List<String> getTransactions() { return transactions; }
+    public long getTimestamp() { return timestamp; }
+    public long getNonce() { return nonce; }
+    public MiningStatus getStatus() { return status; }
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Represents a blockchain — an immutable, ordered chain of blocks.
- */
 class Blockchain {
-    private static final Logger LOGGER     = Logger.getLogger(Blockchain.class.getName());
-    private static final String GENESIS_HASH = "0";
 
-    private final List<Block> chain;
-    private final int         difficulty;
+    private final List<Block> chain = new ArrayList<>();
+    private final int difficulty;
 
-    /**
-     * Creates a new blockchain with the specified mining difficulty.
-     *
-     * @param difficulty Number of leading zeros required for proof-of-work
-     */
     public Blockchain(int difficulty) {
-        if (difficulty < 1) {
-            throw new IllegalArgumentException("Difficulty must be at least 1");
-        }
+        if (difficulty < 1)
+            throw new IllegalArgumentException("Difficulty must be >= 1");
         this.difficulty = difficulty;
-        this.chain      = new ArrayList<>();
-        initializeChain();
+        createGenesis();
     }
 
-    /**
-     * Creates the genesis block (first block in the chain).
-     */
-    private void initializeChain() {
-        LOGGER.info("Creating genesis block...");
-        addBlock("Genesis Block");
+    private void createGenesis() {
+        addBlock(List.of("Genesis Block"));
     }
 
-    /**
-     * Adds a new block with the given transaction data to the chain.
-     *
-     * @param data Transaction data for the new block
-     */
-    public void addBlock(String data) {
-        String previousHash = chain.isEmpty() ? GENESIS_HASH
-                                              : getLatestBlock().getHash();
-
-        Block newBlock = new Block(data, previousHash);
-        LOGGER.info("Mining new block...");
-        newBlock.mineBlock(difficulty);
-        chain.add(newBlock);
+    public void addBlock(List<String> transactions) {
+        String prevHash = chain.isEmpty() ? "0" : getLatestBlock().getHash();
+        Block block = new Block(transactions, prevHash, difficulty);
+        block.mine();
+        chain.add(block);
     }
 
-    /**
-     * Validates the integrity of the entire blockchain.
-     *
-     * @return true if the chain is valid, false otherwise
-     */
-    public boolean isChainValid() {
-        String target = String.join("", Collections.nCopies(difficulty, "0"));
+    public boolean isValid() {
+        for (int i = 0; i < chain.size(); i++) {
+            Block current = chain.get(i);
 
-        for (int i = 1; i < chain.size(); i++) {
-            Block current  = chain.get(i);
-            Block previous = chain.get(i - 1);
+            if (!current.validate()) return false;
 
-            // Check if hash has been tampered with
-            if (!current.getHash().equals(current.calculateHash())) {
-                LOGGER.warning(String.format(
-                    "Block %d has invalid hash (possible tampering)", i
-                ));
-                return false;
-            }
-
-            // Check chain linkage
-            if (!previous.getHash().equals(current.getPreviousHash())) {
-                LOGGER.warning(String.format(
-                    "Block %d is not properly linked to block %d", i, i - 1
-                ));
-                return false;
-            }
-
-            // Check proof-of-work
-            if (!current.getHash().substring(0, difficulty).equals(target)) {
-                LOGGER.warning(String.format(
-                    "Block %d does not meet difficulty requirement", i
-                ));
-                return false;
+            if (i > 0) {
+                Block previous = chain.get(i - 1);
+                if (!current.getPreviousHash().equals(previous.getHash()))
+                    return false;
             }
         }
         return true;
     }
 
-    /**
-     * Prints a formatted summary of all blocks in the chain.
-     */
-    public void printChain() {
-        System.out.println("\n╔══════════════════════════════════════╗");
-        System.out.println("║         BLOCKCHAIN LEDGER            ║");
-        System.out.println("╚══════════════════════════════════════╝");
-
+    public void print() {
+        System.out.println("\n========== BLOCKCHAIN ==========");
         for (int i = 0; i < chain.size(); i++) {
-            Block block = chain.get(i);
-            System.out.println("\n┌─ Block #" + i + " ─────────────────────────");
-            System.out.println("│ Status    : " + block.getStatus());
-            System.out.println("│ Data      : " + block.getData());
-            System.out.println("│ Hash      : " + block.getHash());
-            System.out.println("│ Prev Hash : " + block.getPreviousHash());
-            System.out.println("│ Timestamp : " + Instant.ofEpochMilli(block.getTimeStamp()));
-            System.out.println("│ Nonce     : " + block.getNonce());
-            System.out.println("└────────────────────────────────────");
+            Block b = chain.get(i);
+            System.out.println("Block #" + i);
+            System.out.println(" Hash: " + b.getHash());
+            System.out.println(" Prev: " + b.getPreviousHash());
+            System.out.println(" Nonce: " + b.getNonce());
+            System.out.println(" Time: " + Instant.ofEpochMilli(b.getTimestamp()));
+            System.out.println(" Tx: " + b.getTransactions());
+            System.out.println("--------------------------------");
         }
     }
 
-    // ── Getters ────────────────────────────────────────────────────────────────
-
-    public Block   getLatestBlock()     { return chain.get(chain.size() - 1); }
-    public int     getDifficulty()      { return difficulty;                  }
-    public int     getChainSize()       { return chain.size();                }
-    public List<Block> getChain()       { return Collections.unmodifiableList(chain); }
+    public Block getLatestBlock() { return chain.get(chain.size() - 1); }
+    public List<Block> getChain() { return Collections.unmodifiableList(chain); }
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
+class HashUtil {
+    public static String sha256(String input) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(input.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder();
+            for (byte b : hash) {
+                String h = Integer.toHexString(0xff & b);
+                if (h.length() == 1) hex.append('0');
+                hex.append(h);
+            }
+            return hex.toString();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+}
 
-/**
- * ChainForge — A simple Java blockchain demonstration.
- *
- * <p>Demonstrates proof-of-work mining, chain validation,
- * and immutable block linkage using SHA-256 hashing.</p>
- */
 public class ChainForge {
-    private static final int MINING_DIFFICULTY = 4;
 
     public static void main(String[] args) {
-        System.out.println("╔══════════════════════════════════════╗");
-        System.out.println("║   Welcome to ChainForge v1.0         ║");
-        System.out.println("╚══════════════════════════════════════╝");
-        System.out.printf("Mining difficulty: %d leading zeros%n%n", MINING_DIFFICULTY);
 
-        // ── Initialize Blockchain ──────────────────────────────────────────────
-        Blockchain blockchain = new Blockchain(MINING_DIFFICULTY);
+        int difficulty = 4;
+        Blockchain chain = new Blockchain(difficulty);
 
-        // ── Add Transactions ───────────────────────────────────────────────────
-        blockchain.addBlock("Alice sends 10 BTC to Bob");
-        blockchain.addBlock("Bob sends 5 BTC to Charlie");
-        blockchain.addBlock("Charlie sends 2 BTC to Dave");
+        chain.addBlock(List.of(
+                "Alice -> Bob : 10 BTC",
+                "Bob -> Charlie : 5 BTC"
+        ));
 
-        // ── Display Chain ──────────────────────────────────────────────────────
-        blockchain.printChain();
+        chain.addBlock(List.of(
+                "Charlie -> Dave : 2 BTC",
+                "Dave -> Eve : 1 BTC"
+        ));
 
-        // ── Validate Chain ─────────────────────────────────────────────────────
-        System.out.println("\n╔══════════════════════════════════════╗");
-        System.out.printf ("║ Blockchain valid: %-19s║%n", blockchain.isChainValid());
-        System.out.println("╚══════════════════════════════════════╝");
+        chain.print();
 
-        // ── Simulate Tampering ─────────────────────────────────────────────────
-        demonstrateTamperDetection(blockchain);
-    }
-
-    /**
-     * Demonstrates that tampering with the blockchain is detected.
-     *
-     * @param blockchain The blockchain to tamper with
-     */
-    private static void demonstrateTamperDetection(Blockchain blockchain) {
-        System.out.println("\n[TEST] Simulating blockchain tampering...");
-        System.out.println("Blockchain valid after tamper: " + blockchain.isChainValid());
+        System.out.println("Chain valid: " + chain.isValid());
     }
 }
