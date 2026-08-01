@@ -5,53 +5,32 @@ import java.util.*;
 
 public class RateLimiter {
 
-    // ─────────────────────────────────────────
-    // Result record
-    // ─────────────────────────────────────────
-
-    /**
-     * Rich result returned by every tryAcquire() call.
-     * Carries the decision plus diagnostic info.
-     */
-    public record AcquireResult(
-        boolean allowed,
-        long    remainingTokens,
-        long    retryAfterMs,    // 0 if allowed
-        String  strategyName
-    ) {
+    public record AcquireResult(boolean allowed, long remainingTokens, long retryAfterMs, String strategyName) {
         @Override
         public String toString() {
             return allowed
-                ? String.format("[%s] ✅ ALLOWED  remaining=%-4d", strategyName, remainingTokens)
-                : String.format("[%s] ❌ REJECTED retry-after=%dms", strategyName, retryAfterMs);
+                ? String.format("[%s] ALLOWED remaining=%-4d", strategyName, remainingTokens)
+                : String.format("[%s] REJECTED retry-after=%dms", strategyName, retryAfterMs);
         }
     }
 
-    // ─────────────────────────────────────────
-    // Strategy interface
-    // ─────────────────────────────────────────
-
     public interface Strategy {
         AcquireResult tryAcquire();
-        Metrics       metrics();
-        String        name();
-        void          reset();
+        Metrics metrics();
+        String name();
+        void reset();
     }
 
-    // ─────────────────────────────────────────
-    // Metrics (lock-free)
-    // ─────────────────────────────────────────
-
     public static class Metrics {
-        private final AtomicLong allowed  = new AtomicLong();
+        private final AtomicLong allowed = new AtomicLong();
         private final AtomicLong rejected = new AtomicLong();
 
-        void recordAllowed()  { allowed.incrementAndGet();  }
+        void recordAllowed() { allowed.incrementAndGet(); }
         void recordRejected() { rejected.incrementAndGet(); }
 
-        public long allowed()  { return allowed.get();  }
+        public long allowed() { return allowed.get(); }
         public long rejected() { return rejected.get(); }
-        public long total()    { return allowed.get() + rejected.get(); }
+        public long total() { return allowed.get() + rejected.get(); }
 
         public double rejectionRate() {
             long t = total();
@@ -60,46 +39,26 @@ public class RateLimiter {
 
         @Override
         public String toString() {
-            return String.format("allowed=%d  rejected=%d  total=%d  rejection=%.1f%%",
-                                 allowed(), rejected(), total(), rejectionRate());
+            return String.format("allowed=%d rejected=%d total=%d rejection=%.1f%%",
+                allowed(), rejected(), total(), rejectionRate());
         }
     }
 
-    // ─────────────────────────────────────────
-    // 1. Token Bucket
-    // ─────────────────────────────────────────
-
-    /**
-     * Classic token bucket.
-     *
-     * - Tokens accumulate at a fixed rate up to a maximum capacity.
-     * - Each request consumes one token.
-     * - Allows short bursts up to capacity.
-     *
-     * Thread safety: single ReentrantLock guards all mutable state.
-     */
     public static class TokenBucket implements Strategy {
-
-        private final long    capacity;
-        private final double  refillRatePerNs; // tokens per nanosecond
+        private final long capacity;
+        private final double refillRatePerNs;
         private final Metrics metrics = new Metrics();
-        private final Lock    lock    = new ReentrantLock();
-
+        private final Lock lock = new ReentrantLock();
         private double tokens;
-        private long   lastRefillNs;
+        private long lastRefillNs;
 
-        /**
-         * @param capacity             maximum tokens (burst size)
-         * @param refillRatePerSecond  tokens added per second
-         */
         public TokenBucket(long capacity, double refillRatePerSecond) {
-            if (capacity <= 0)           throw new IllegalArgumentException("capacity > 0");
-            if (refillRatePerSecond <= 0)throw new IllegalArgumentException("refillRate > 0");
-
-            this.capacity          = capacity;
-            this.refillRatePerNs   = refillRatePerSecond / 1_000_000_000.0;
-            this.tokens            = capacity;
-            this.lastRefillNs      = System.nanoTime();
+            if (capacity <= 0) throw new IllegalArgumentException("capacity > 0");
+            if (refillRatePerSecond <= 0) throw new IllegalArgumentException("refillRate > 0");
+            this.capacity = capacity;
+            this.refillRatePerNs = refillRatePerSecond / 1_000_000_000.0;
+            this.tokens = capacity;
+            this.lastRefillNs = System.nanoTime();
         }
 
         @Override
@@ -107,42 +66,37 @@ public class RateLimiter {
             lock.lock();
             try {
                 refill();
-
                 if (tokens >= 1.0) {
                     tokens--;
                     metrics.recordAllowed();
                     return new AcquireResult(true, (long) tokens, 0, name());
                 }
-
-                // Estimate how long until the next token arrives
                 long retryAfterMs = (long) ((1.0 - tokens) / refillRatePerNs / 1_000_000.0);
                 metrics.recordRejected();
                 return new AcquireResult(false, 0, retryAfterMs, name());
-
             } finally {
                 lock.unlock();
             }
         }
 
         private void refill() {
-            long   now     = System.nanoTime();
-            long   elapsed = now - lastRefillNs;
-            double toAdd   = elapsed * refillRatePerNs;
-
-            if (toAdd >= 0.001) { // avoid precision noise
-                tokens       = Math.min(capacity, tokens + toAdd);
+            long now = System.nanoTime();
+            long elapsed = now - lastRefillNs;
+            double toAdd = elapsed * refillRatePerNs;
+            if (toAdd >= 0.001) {
+                tokens = Math.min(capacity, tokens + toAdd);
                 lastRefillNs = now;
             }
         }
 
         @Override public Metrics metrics() { return metrics; }
-        @Override public String  name()    { return "TokenBucket"; }
+        @Override public String name() { return "TokenBucket"; }
 
         @Override
         public void reset() {
             lock.lock();
             try {
-                tokens       = capacity;
+                tokens = capacity;
                 lastRefillNs = System.nanoTime();
             } finally {
                 lock.unlock();
@@ -150,39 +104,19 @@ public class RateLimiter {
         }
     }
 
-    // ─────────────────────────────────────────
-    // 2. Fixed Window Counter
-    // ─────────────────────────────────────────
-
-    /**
-     * Fixed window counter.
-     *
-     * - Divides time into fixed windows of windowMs duration.
-     * - At most `limit` requests allowed per window.
-     * - Simple but can allow 2× the limit at window boundaries.
-     *
-     * Thread safety: single ReentrantLock.
-     */
     public static class FixedWindow implements Strategy {
-
-        private final long    limit;
-        private final long    windowMs;
+        private final long limit;
+        private final long windowMs;
         private final Metrics metrics = new Metrics();
-        private final Lock    lock    = new ReentrantLock();
-
+        private final Lock lock = new ReentrantLock();
         private long count;
         private long windowStart;
 
-        /**
-         * @param limit    max requests per window
-         * @param windowMs window duration in milliseconds
-         */
         public FixedWindow(long limit, long windowMs) {
-            if (limit    <= 0) throw new IllegalArgumentException("limit > 0");
+            if (limit <= 0) throw new IllegalArgumentException("limit > 0");
             if (windowMs <= 0) throw new IllegalArgumentException("windowMs > 0");
-
-            this.limit       = limit;
-            this.windowMs    = windowMs;
+            this.limit = limit;
+            this.windowMs = windowMs;
             this.windowStart = System.currentTimeMillis();
         }
 
@@ -191,36 +125,31 @@ public class RateLimiter {
             lock.lock();
             try {
                 long now = System.currentTimeMillis();
-
-                // Roll over to new window if needed
                 if (now - windowStart >= windowMs) {
                     windowStart = now;
-                    count       = 0;
+                    count = 0;
                 }
-
                 if (count < limit) {
                     count++;
                     metrics.recordAllowed();
                     return new AcquireResult(true, limit - count, 0, name());
                 }
-
                 long retryAfterMs = windowMs - (now - windowStart);
                 metrics.recordRejected();
                 return new AcquireResult(false, 0, retryAfterMs, name());
-
             } finally {
                 lock.unlock();
             }
         }
 
         @Override public Metrics metrics() { return metrics; }
-        @Override public String  name()    { return "FixedWindow"; }
+        @Override public String name() { return "FixedWindow"; }
 
         @Override
         public void reset() {
             lock.lock();
             try {
-                count       = 0;
+                count = 0;
                 windowStart = System.currentTimeMillis();
             } finally {
                 lock.unlock();
@@ -228,36 +157,17 @@ public class RateLimiter {
         }
     }
 
-    // ─────────────────────────────────────────
-    // 3. Sliding Window Log
-    // ─────────────────────────────────────────
-
-    /**
-     * Sliding window log.
-     *
-     * - Keeps a timestamp for every accepted request.
-     * - Evicts timestamps outside the rolling window before deciding.
-     * - More accurate than fixed window; higher memory use.
-     *
-     * Thread safety: single ReentrantLock.
-     */
     public static class SlidingWindowLog implements Strategy {
+        private final long limit;
+        private final long windowMs;
+        private final Deque<Long> log = new ArrayDeque<>();
+        private final Metrics metrics = new Metrics();
+        private final Lock lock = new ReentrantLock();
 
-        private final long              limit;
-        private final long              windowMs;
-        private final Deque<Long>       log     = new ArrayDeque<>();
-        private final Metrics           metrics = new Metrics();
-        private final Lock              lock    = new ReentrantLock();
-
-        /**
-         * @param limit    max requests in any rolling window
-         * @param windowMs window duration in milliseconds
-         */
         public SlidingWindowLog(long limit, long windowMs) {
-            if (limit    <= 0) throw new IllegalArgumentException("limit > 0");
+            if (limit <= 0) throw new IllegalArgumentException("limit > 0");
             if (windowMs <= 0) throw new IllegalArgumentException("windowMs > 0");
-
-            this.limit    = limit;
+            this.limit = limit;
             this.windowMs = windowMs;
         }
 
@@ -265,32 +175,26 @@ public class RateLimiter {
         public AcquireResult tryAcquire() {
             lock.lock();
             try {
-                long now      = System.currentTimeMillis();
+                long now = System.currentTimeMillis();
                 long boundary = now - windowMs;
-
-                // Remove timestamps outside the window
                 while (!log.isEmpty() && log.peekFirst() <= boundary) {
                     log.pollFirst();
                 }
-
                 if (log.size() < limit) {
                     log.addLast(now);
                     metrics.recordAllowed();
                     return new AcquireResult(true, limit - log.size(), 0, name());
                 }
-
-                // Oldest entry tells us when a slot frees up
                 long retryAfterMs = log.peekFirst() + windowMs - now;
                 metrics.recordRejected();
                 return new AcquireResult(false, 0, Math.max(0, retryAfterMs), name());
-
             } finally {
                 lock.unlock();
             }
         }
 
         @Override public Metrics metrics() { return metrics; }
-        @Override public String  name()    { return "SlidingWindowLog"; }
+        @Override public String name() { return "SlidingWindowLog"; }
 
         @Override
         public void reset() {
@@ -300,16 +204,7 @@ public class RateLimiter {
         }
     }
 
-    // ─────────────────────────────────────────
-    // Per-client registry
-    // ─────────────────────────────────────────
-
-    /**
-     * Maintains one Strategy instance per client key.
-     * New clients automatically receive a limiter built by the provided factory.
-     */
     public static class Registry<S extends Strategy> {
-
         private final ConcurrentHashMap<String, S> limiters = new ConcurrentHashMap<>();
         private final java.util.function.Supplier<S> factory;
 
@@ -332,20 +227,14 @@ public class RateLimiter {
         }
     }
 
-    // ─────────────────────────────────────────
-    // Demo helpers
-    // ─────────────────────────────────────────
-
     private static void printHeader(String title) {
         System.out.println("\n╔══════════════════════════════════════════════════╗");
-        System.out.printf ("║  %-48s║%n", title);
+        System.out.printf("║  %-48s║%n", title);
         System.out.println("╚══════════════════════════════════════════════════╝");
     }
 
-    private static void runBurst(Strategy strategy, int requests, long sleepMs)
-            throws InterruptedException {
-        System.out.printf("  Sending %d requests (sleep %dms between each):%n",
-                          requests, sleepMs);
+    private static void runBurst(Strategy strategy, int requests, long sleepMs) throws InterruptedException {
+        System.out.printf("  Sending %d requests (sleep %dms between each):%n", requests, sleepMs);
         for (int i = 1; i <= requests; i++) {
             AcquireResult r = strategy.tryAcquire();
             System.out.printf("    #%-3d %s%n", i, r);
@@ -354,13 +243,7 @@ public class RateLimiter {
         System.out.println("  Metrics → " + strategy.metrics());
     }
 
-    // ─────────────────────────────────────────
-    // Main
-    // ─────────────────────────────────────────
-
     public static void main(String[] args) throws InterruptedException {
-
-        // ── 1. Token Bucket ──────────────────────────────────────────────────
         printHeader("1. Token Bucket  (cap=5, refill=2/sec)");
         TokenBucket bucket = new TokenBucket(5, 2.0);
         System.out.println("  Burst phase – drain all 5 tokens instantly:");
@@ -374,7 +257,6 @@ public class RateLimiter {
         }
         System.out.println("  Metrics → " + bucket.metrics());
 
-        // ── 2. Fixed Window ──────────────────────────────────────────────────
         printHeader("2. Fixed Window  (limit=3, window=1000ms)");
         FixedWindow fixed = new FixedWindow(3, 1000);
         System.out.println("  5 rapid requests (expect 3 allowed, 2 rejected):");
@@ -385,7 +267,6 @@ public class RateLimiter {
         System.out.println("  3 more requests (expect all allowed):");
         runBurst(fixed, 3, 0);
 
-        // ── 3. Sliding Window Log ────────────────────────────────────────────
         printHeader("3. Sliding Window Log  (limit=3, window=1000ms)");
         SlidingWindowLog sliding = new SlidingWindowLog(3, 1000);
         System.out.println("  5 rapid requests:");
@@ -399,11 +280,8 @@ public class RateLimiter {
         }
         System.out.println("  Metrics → " + sliding.metrics());
 
-        // ── 4. Per-client registry ───────────────────────────────────────────
         printHeader("4. Per-client Registry  (TokenBucket cap=3, refill=1/sec)");
-        Registry<TokenBucket> registry =
-            new Registry<>(() -> new TokenBucket(3, 1.0));
-
+        Registry<TokenBucket> registry = new Registry<>(() -> new TokenBucket(3, 1.0));
         String[] clients = { "alice", "bob", "alice", "alice", "bob", "charlie", "alice" };
         System.out.println("  Request sequence: " + Arrays.toString(clients));
         for (String client : clients) {
@@ -415,24 +293,22 @@ public class RateLimiter {
         registry.allMetrics().forEach((client, m) ->
             System.out.printf("    %-10s %s%n", client, m));
 
-        // ── 5. Concurrent stress test ────────────────────────────────────────
         printHeader("5. Concurrent Stress Test  (TokenBucket cap=10, refill=5/sec)");
-        TokenBucket         stressed = new TokenBucket(10, 5.0);
-        int                 threads  = 8;
-        int                 each     = 20;
-        CountDownLatch      latch    = new CountDownLatch(threads);
-        ExecutorService     pool     = Executors.newFixedThreadPool(threads);
-        AtomicLong          allowed  = new AtomicLong();
-        AtomicLong          rejected = new AtomicLong();
+        TokenBucket stressed = new TokenBucket(10, 5.0);
+        int threads = 8;
+        int each = 20;
+        CountDownLatch latch = new CountDownLatch(threads);
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        AtomicLong allowed = new AtomicLong();
+        AtomicLong rejected = new AtomicLong();
 
-        System.out.printf("  %d threads × %d requests = %d total%n",
-                          threads, each, threads * each);
+        System.out.printf("  %d threads × %d requests = %d total%n", threads, each, threads * each);
 
         for (int t = 0; t < threads; t++) {
             pool.submit(() -> {
                 for (int r = 0; r < each; r++) {
                     if (stressed.tryAcquire().allowed()) allowed.incrementAndGet();
-                    else                                 rejected.incrementAndGet();
+                    else rejected.incrementAndGet();
                 }
                 latch.countDown();
             });
