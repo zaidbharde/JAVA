@@ -4,30 +4,25 @@ import java.util.Scanner;
 public class AIDuel {
 
     private static final Random random = new Random();
-    private static final int MAX_HP = 100;
     private static final int TOTAL_ROUNDS = 3;
 
-    // ─────────────────────────────────────────
-    // Enums
-    // ─────────────────────────────────────────
-
     enum FighterClass {
-        WARRIOR ("⚔️  Warrior", 120, 0.10, 0.20, 0.08),  // High HP, high crit
-        MAGE    ("🔮 Mage",     80,  0.25, 0.30, 0.05),  // Low HP, very high crit/miss
-        ROGUE   ("🗡️  Rogue",   90,  0.05, 0.25, 0.15);  // Balanced, high dodge
+        WARRIOR("⚔️  Warrior", 120, 0.10, 0.20, 0.08),
+        MAGE("🔮 Mage", 80, 0.25, 0.30, 0.05),
+        ROGUE("🗡️  Rogue", 90, 0.05, 0.25, 0.15);
 
         final String label;
-        final int    baseHP;
+        final int baseHP;
         final double missChance;
         final double critChance;
         final double dodgeChance;
 
         FighterClass(String label, int baseHP,
                      double missChance, double critChance, double dodgeChance) {
-            this.label       = label;
-            this.baseHP      = baseHP;
-            this.missChance  = missChance;
-            this.critChance  = critChance;
+            this.label = label;
+            this.baseHP = baseHP;
+            this.missChance = missChance;
+            this.critChance = critChance;
             this.dodgeChance = dodgeChance;
         }
     }
@@ -36,63 +31,67 @@ public class AIDuel {
         NONE, POISONED, STUNNED, BURNED
     }
 
-    // ─────────────────────────────────────────
-    // Fighter
-    // ─────────────────────────────────────────
-
     static class Fighter {
 
-        private final String       name;
+        private final String name;
         private final FighterClass fighterClass;
-        private int                hp;
-        private int                maxHP;
-        private int                wins;
-        private StatusEffect       status;
-        private int                statusDuration;
+        private int hp;
+        private int maxHP;
+        private int wins;
+        private StatusEffect status;
+        private int statusDuration;
 
         public Fighter(String name, FighterClass fighterClass) {
-            this.name         = name;
+            this.name = name;
             this.fighterClass = fighterClass;
-            this.maxHP        = fighterClass.baseHP;
-            this.hp           = maxHP;
-            this.wins         = 0;
-            this.status       = StatusEffect.NONE;
+            this.maxHP = fighterClass.baseHP;
+            this.hp = maxHP;
+            this.wins = 0;
+            this.status = StatusEffect.NONE;
             this.statusDuration = 0;
         }
 
-        // ── Getters ──────────────────────────
+        public String getName() {
+            return name;
+        }
 
-        public String       getName()        { return name; }
-        public FighterClass getFighterClass(){ return fighterClass; }
-        public int          getHP()          { return hp; }
-        public int          getMaxHP()       { return maxHP; }
-        public int          getWins()        { return wins; }
-        public StatusEffect getStatus()      { return status; }
-        public boolean      isAlive()        { return hp > 0; }
+        public FighterClass getFighterClass() {
+            return fighterClass;
+        }
 
-        // ── Combat ───────────────────────────
+        public int getHP() {
+            return hp;
+        }
 
-        /**
-         * Base attack varies by class.
-         * Warrior: 12-27 | Mage: 15-35 | Rogue: 10-22
-         */
+        public int getMaxHP() {
+            return maxHP;
+        }
+
+        public int getWins() {
+            return wins;
+        }
+
+        public StatusEffect getStatus() {
+            return status;
+        }
+
+        public boolean isAlive() {
+            return hp > 0;
+        }
+
         public int attack() {
             return switch (fighterClass) {
                 case WARRIOR -> random.nextInt(16) + 12;
-                case MAGE    -> random.nextInt(21) + 15;
-                case ROGUE   -> random.nextInt(13) + 10;
+                case MAGE -> random.nextInt(21) + 15;
+                case ROGUE -> random.nextInt(13) + 10;
             };
         }
 
-        /**
-         * Base defense varies by class.
-         * Warrior: 5-14 | Mage: 2-7 | Rogue: 3-10
-         */
         public int defend() {
             return switch (fighterClass) {
                 case WARRIOR -> random.nextInt(10) + 5;
-                case MAGE    -> random.nextInt(6)  + 2;
-                case ROGUE   -> random.nextInt(8)  + 3;
+                case MAGE -> random.nextInt(6) + 2;
+                case ROGUE -> random.nextInt(8) + 3;
             };
         }
 
@@ -104,21 +103,17 @@ public class AIDuel {
             hp = Math.min(maxHP, hp + amount);
         }
 
-        public void addWin() { wins++; }
-
-        // ── Status Effects ───────────────────
+        public void addWin() {
+            wins++;
+        }
 
         public void applyStatus(StatusEffect effect, int duration) {
             if (status == StatusEffect.NONE) {
-                this.status         = effect;
+                this.status = effect;
                 this.statusDuration = duration;
             }
         }
 
-        /**
-         * Processes status effect at the start of a turn.
-         * @return descriptive message, or null if no effect
-         */
         public String processStatus() {
             if (status == StatusEffect.NONE) return null;
 
@@ -126,19 +121,21 @@ public class AIDuel {
 
             switch (status) {
                 case POISONED -> {
-                    int poisonDmg = (int)(maxHP * 0.05);
+                    int poisonDmg = (int) (maxHP * 0.05);
                     takeDamage(poisonDmg);
                     message = String.format("☠️  %s takes %d poison damage! (HP: %d)",
-                                            name, poisonDmg, hp);
+                            name, poisonDmg, hp);
                 }
                 case BURNED -> {
-                    int burnDmg = (int)(maxHP * 0.07);
+                    int burnDmg = (int) (maxHP * 0.07);
                     takeDamage(burnDmg);
                     message = String.format("🔥 %s takes %d burn damage! (HP: %d)",
-                                            name, burnDmg, hp);
+                            name, burnDmg, hp);
                 }
                 case STUNNED -> {
                     message = String.format("⚡ %s is stunned and cannot act!", name);
+                }
+                default -> {
                 }
             }
 
@@ -154,14 +151,6 @@ public class AIDuel {
             return status == StatusEffect.STUNNED;
         }
 
-        // ── Special Ability ──────────────────
-
-        /**
-         * Each class has a unique special ability (20% activation chance).
-         * Warrior: Shield Bash – stuns enemy for 1 turn
-         * Mage:    Arcane Burst – applies burn for 2 turns
-         * Rogue:   Venom Strike – applies poison for 3 turns
-         */
         public SpecialResult useSpecial(Fighter target) {
             if (random.nextDouble() >= 0.20) return null;
 
@@ -169,39 +158,30 @@ public class AIDuel {
                 case WARRIOR -> {
                     target.applyStatus(StatusEffect.STUNNED, 1);
                     yield new SpecialResult(
-                        "🛡️  Shield Bash! " + target.getName() + " is STUNNED!", 0);
+                            "🛡️  Shield Bash! " + target.getName() + " is STUNNED!", 0);
                 }
                 case MAGE -> {
                     target.applyStatus(StatusEffect.BURNED, 2);
                     yield new SpecialResult(
-                        "🔥 Arcane Burst! " + target.getName() + " is BURNED for 2 turns!", 0);
+                            "🔥 Arcane Burst! " + target.getName() + " is BURNED for 2 turns!", 0);
                 }
                 case ROGUE -> {
                     target.applyStatus(StatusEffect.POISONED, 3);
                     yield new SpecialResult(
-                        "☠️  Venom Strike! " + target.getName() + " is POISONED for 3 turns!", 0);
+                            "☠️  Venom Strike! " + target.getName() + " is POISONED for 3 turns!", 0);
                 }
             };
         }
 
-        // ── Reset ────────────────────────────
-
         public void resetForNewRound() {
-            hp             = maxHP;
-            status         = StatusEffect.NONE;
+            hp = maxHP;
+            status = StatusEffect.NONE;
             statusDuration = 0;
         }
     }
 
-    // ─────────────────────────────────────────
-    // SpecialResult record
-    // ─────────────────────────────────────────
-
-    record SpecialResult(String message, int extraDamage) {}
-
-    // ─────────────────────────────────────────
-    // Main
-    // ─────────────────────────────────────────
+    record SpecialResult(String message, int extraDamage) {
+    }
 
     public static void main(String[] args) {
 
@@ -221,8 +201,6 @@ public class AIDuel {
         System.out.println("═".repeat(50));
 
         pause(scanner);
-
-        // ── Round Loop ────────────────────────
 
         int roundNumber = 1;
 
@@ -249,8 +227,6 @@ public class AIDuel {
             pause(scanner);
         }
 
-        // ── Match Winner ──────────────────────
-
         Fighter champion = botX.getWins() >= TOTAL_ROUNDS ? botX : botZ;
 
         System.out.println("\n" + "═".repeat(50));
@@ -263,10 +239,6 @@ public class AIDuel {
 
         scanner.close();
     }
-
-    // ─────────────────────────────────────────
-    // Round Logic
-    // ─────────────────────────────────────────
 
     static Fighter playRound(Fighter botX, Fighter botZ) {
 
@@ -291,46 +263,36 @@ public class AIDuel {
         return botX.isAlive() ? botX : botZ;
     }
 
-    // ─────────────────────────────────────────
-    // Turn Logic
-    // ─────────────────────────────────────────
-
     static void processTurn(Fighter attacker, Fighter defender) {
 
-        // 1. Process attacker's status effect
         String statusMsg = attacker.processStatus();
         if (statusMsg != null) System.out.println("  " + statusMsg);
 
         if (!attacker.isAlive()) return;
 
-        // 2. Skip turn if stunned
         if (attacker.isStunned()) return;
 
-        // 3. Dodge check
         if (random.nextDouble() < defender.getFighterClass().dodgeChance) {
             System.out.printf("  %s dodged %s's attack!%n",
-                              defender.getName(), attacker.getName());
+                    defender.getName(), attacker.getName());
             return;
         }
 
-        // 4. Miss check
         if (random.nextDouble() < attacker.getFighterClass().missChance) {
             System.out.printf("  %s MISSED the attack!%n", attacker.getName());
             return;
         }
 
-        // 5. Special ability attempt
         SpecialResult special = attacker.useSpecial(defender);
         if (special != null) {
             System.out.println("  " + special.message());
         }
 
-        // 6. Regular attack
         int rawAttack = attacker.attack();
-        int defense   = defender.defend();
-        boolean crit  = random.nextDouble() < attacker.getFighterClass().critChance;
+        int defense = defender.defend();
+        boolean crit = random.nextDouble() < attacker.getFighterClass().critChance;
 
-        if (crit) rawAttack = (int)(rawAttack * 1.75);
+        if (crit) rawAttack = (int) (rawAttack * 1.75);
 
         int damage = Math.max(1, rawAttack - defense);
         defender.takeDamage(damage);
@@ -346,10 +308,6 @@ public class AIDuel {
                 defender.getMaxHP());
     }
 
-    // ─────────────────────────────────────────
-    // Fighter Creation
-    // ─────────────────────────────────────────
-
     static Fighter createFighter(String name, Scanner scanner) {
 
         System.out.println("\nChoose class for " + name + ":");
@@ -361,8 +319,8 @@ public class AIDuel {
                     i + 1,
                     fc.label,
                     fc.baseHP,
-                    fc.missChance  * 100,
-                    fc.critChance  * 100,
+                    fc.missChance * 100,
+                    fc.critChance * 100,
                     fc.dodgeChance * 100);
         }
 
@@ -379,26 +337,22 @@ public class AIDuel {
         return new Fighter(name, classes[choice - 1]);
     }
 
-    // ─────────────────────────────────────────
-    // Display Helpers
-    // ─────────────────────────────────────────
-
     static void printHealth(Fighter fighter) {
 
         int barLength = 20;
-        int filled    = (int)((double) fighter.getHP() / fighter.getMaxHP() * barLength);
+        int filled = (int) ((double) fighter.getHP() / fighter.getMaxHP() * barLength);
 
         String color = filled > 12 ? "🟩" : filled > 6 ? "🟨" : "🟥";
 
         StringBuilder bar = new StringBuilder();
-        for (int i = 0; i < filled;     i++) bar.append("█");
+        for (int i = 0; i < filled; i++) bar.append("█");
         for (int i = filled; i < barLength; i++) bar.append("░");
 
         String statusTag = switch (fighter.getStatus()) {
             case POISONED -> " ☠️ ";
-            case STUNNED  -> " ⚡";
-            case BURNED   -> " 🔥";
-            default       -> "";
+            case STUNNED -> " ⚡";
+            case BURNED -> " 🔥";
+            default -> "";
         };
 
         System.out.printf("  %s %s [%s] %d/%d HP%s%n",
