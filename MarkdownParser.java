@@ -1,95 +1,115 @@
 import java.util.*;
 import java.util.regex.*;
+import java.util.stream.Collectors;
 
 public class MarkdownParser {
 
+    private interface BlockRule {
+        boolean matches(String line);
+        String apply(String line, ParserContext context);
+    }
+
+    private static class ParserContext {
+        boolean inList = false;
+        boolean inCode = false;
+    }
+
+    private static final List<BlockRule> RULES = List.of(
+        (l) -> l.startsWith("```"), (l, ctx) -> {
+            if (ctx.inCode) { ctx.inCode = false; return "</code></pre>"; }
+            ctx.inCode = true; return "<pre><code>";
+        },
+        (l) -> l.startsWith("#"), (l, ctx) -> {
+            int level = 0;
+            while (level < l.length() && l.charAt(level) == '#') level++;
+            String content = l.substring(level).trim();
+            return String.format("<h%d>%s</h%d>", level, parseInline(content), level);
+        },
+        (l) -> l.startsWith("- ") || l.startsWith("* "), (l, ctx) -> {
+            StringBuilder sb = new StringBuilder();
+            if (!ctx.inList) { sb.append("<ul>\n"); ctx.inList = true; }
+            sb.append("  <li>").append(parseInline(l.substring(2))).append("</li>");
+            return sb.toString();
+        },
+        (l) -> l.startsWith("> "), (l, ctx) -> "<blockquote>" + parseInline(l.substring(2)) + "</blockquote>",
+        (l) -> l.matches("-{3,}|\\*{3,}|_{3,}"), (l, ctx) -> "<hr>",
+        (l) -> l.trim().isEmpty(), (l, ctx) -> ""
+    );
+
+    private static final Map<Pattern, String> INLINE_RULES = new LinkedHashMap<>() {{
+        put(Pattern.compile("!\\[(.+?)\\]\\((.+?)\\)"), "<img src=\"$2\" alt=\"$1\">");
+        put(Pattern.compile("\\[(.+?)\\]\\((.+?)\\)"), "<a href=\"$2\">$1</a>");
+        put(Pattern.compile("(\\*\\*|__)(.+?)\\1"), "<strong>$2</strong>");
+        put(Pattern.compile("(\\*|_)(.+?)\\1"), "<em>$2</em>");
+        put(Pattern.compile("~~(.+?)~~"), "<del>$1</del>");
+        put(Pattern.compile("`(.+?)`"), "<code>$1</code>");
+    }};
+
     public static String parse(String markdown) {
-        String[] lines   = markdown.split("\n");
+        if (markdown == null) return "";
+        
+        ParserContext context = new ParserContext();
         StringBuilder html = new StringBuilder();
-        boolean inList   = false;
-        boolean inCode   = false;
+        String[] lines = markdown.split("\\R");
 
         for (String line : lines) {
-            if (line.startsWith("```")) {
-                if (inCode) { html.append("</code></pre>\n"); inCode = false; }
-                else        { html.append("<pre><code>\n");   inCode = true; }
+            if (context.inCode && !line.startsWith("```")) {
+                html.append(escapeHtml(line)).append("\n");
                 continue;
             }
-            if (inCode) { html.append(escapeHtml(line)).append("\n"); continue; }
 
-            if (line.startsWith("- ") || line.startsWith("* ")) {
-                if (!inList) { html.append("<ul>\n"); inList = true; }
-                html.append("  <li>").append(parseInline(line.substring(2))).append("</li>\n");
-                continue;
-            } else if (inList) {
+            if (context.inList && !line.startsWith("- ") && !line.startsWith("* ")) {
                 html.append("</ul>\n");
-                inList = false;
+                context.inList = false;
             }
 
-            if (line.startsWith("######"))     html.append("<h6>").append(parseInline(line.substring(7).trim())).append("</h6>\n");
-            else if (line.startsWith("#####"))  html.append("<h5>").append(parseInline(line.substring(6).trim())).append("</h5>\n");
-            else if (line.startsWith("####"))   html.append("<h4>").append(parseInline(line.substring(5).trim())).append("</h4>\n");
-            else if (line.startsWith("###"))    html.append("<h3>").append(parseInline(line.substring(4).trim())).append("</h3>\n");
-            else if (line.startsWith("##"))     html.append("<h2>").append(parseInline(line.substring(3).trim())).append("</h2>\n");
-            else if (line.startsWith("#"))      html.append("<h1>").append(parseInline(line.substring(2).trim())).append("</h1>\n");
-            else if (line.matches("-{3,}|\\*{3,}|_{3,}")) html.append("<hr>\n");
-            else if (line.startsWith("> "))     html.append("<blockquote>").append(parseInline(line.substring(2))).append("</blockquote>\n");
-            else if (line.trim().isEmpty())     html.append("\n");
-            else                                html.append("<p>").append(parseInline(line)).append("</p>\n");
+            Optional<BlockRule> rule = RULES.stream().filter(r -> r.matches(line)).findFirst();
+            
+            if (rule.isPresent()) {
+                String result = rule.get().apply(line, context);
+                if (!result.isEmpty()) html.append(result).append("\n");
+            } else {
+                html.append("<p>").append(parseInline(line)).append("</p>\n");
+            }
         }
 
-        if (inList) html.append("</ul>\n");
-        if (inCode) html.append("</code></pre>\n");
+        if (context.inList) html.append("</ul>\n");
+        if (context.inCode) html.append("</code></pre>\n");
 
-        return html.toString();
+        return html.toString().trim();
     }
 
     private static String parseInline(String text) {
-        text = Pattern.compile("\\*\\*(.+?)\\*\\*").matcher(text).replaceAll("<strong>$1</strong>");
-        text = Pattern.compile("__(.+?)__").matcher(text).replaceAll("<strong>$1</strong>");
-        text = Pattern.compile("\\*(.+?)\\*").matcher(text).replaceAll("<em>$1</em>");
-        text = Pattern.compile("_(.+?)_").matcher(text).replaceAll("<em>$1</em>");
-        text = Pattern.compile("~~(.+?)~~").matcher(text).replaceAll("<del>$1</del>");
-        text = Pattern.compile("`(.+?)`").matcher(text).replaceAll("<code>$1</code>");
-        text = Pattern.compile("\\[(.+?)\\]\\((.+?)\\)").matcher(text).replaceAll("<a href=\"$2\">$1</a>");
-        text = Pattern.compile("!\\[(.+?)\\]\\((.+?)\\)").matcher(text).replaceAll("<img src=\"$2\" alt=\"$1\">");
+        for (Map.Entry<Pattern, String> entry : INLINE_RULES.entrySet()) {
+            text = entry.getKey().matcher(text).replaceAll(entry.getValue());
+        }
         return text;
     }
 
     private static String escapeHtml(String text) {
-        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+        return text.replace("&", "&amp;")
+                   .replace("<", "&lt;")
+                   .replace(">", "&gt;")
+                   .replace("\"", "&quot;")
+                   .replace("'", "&#39;");
     }
 
     public static void main(String[] args) {
         String md = """
-            # Hello World
-            ## Subtitle here
+            # Modern Parser
+            This is a **robust** implementation.
 
-            This is **bold** and *italic* and ~~strikethrough~~.
+            - Clean code
+            - Pattern matching
+            - Logic separation
 
-            Here is `inline code` and a [link](https://google.com).
+            > Architecture matters.
 
-            > This is a blockquote
-
-            - Item one
-            - Item **two**
-            - Item *three*
-
-            ---
-
+            ```java
+            public class Main {}
             ```
-            def hello():
-                print("code block")
-            ```
-
-            Final paragraph with **mixed** _formatting_ here.
             """;
 
-        System.out.println("=".repeat(50));
-        System.out.println("  Markdown Parser");
-        System.out.println("=".repeat(50));
-
-        String html = parse(md);
-        System.out.println(html);
+        System.out.println(parse(md));
     }
 }
