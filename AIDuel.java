@@ -4,7 +4,14 @@ import java.util.Scanner;
 public class AIDuel {
 
     private static final Random random = new Random();
-    private static final int TOTAL_ROUNDS = 3;
+
+    // --- Tunable constants (previously magic numbers) ---
+    private static final int WINS_NEEDED = 3;
+    private static final double SPECIAL_TRIGGER_CHANCE = 0.20;
+    private static final double CRIT_MULTIPLIER = 1.75;
+    private static final double POISON_DAMAGE_PCT = 0.05;
+    private static final double BURN_DAMAGE_PCT = 0.07;
+    private static final int HEALTH_BAR_LENGTH = 20;
 
     enum FighterClass {
         WARRIOR("⚔️  Warrior", 120, 0.10, 0.20, 0.08),
@@ -36,7 +43,7 @@ public class AIDuel {
         private final String name;
         private final FighterClass fighterClass;
         private int hp;
-        private int maxHP;
+        private final int maxHP;
         private int wins;
         private StatusEffect status;
         private int statusDuration;
@@ -121,13 +128,13 @@ public class AIDuel {
 
             switch (status) {
                 case POISONED -> {
-                    int poisonDmg = (int) (maxHP * 0.05);
+                    int poisonDmg = (int) (maxHP * POISON_DAMAGE_PCT);
                     takeDamage(poisonDmg);
                     message = String.format("☠️  %s takes %d poison damage! (HP: %d)",
                             name, poisonDmg, hp);
                 }
                 case BURNED -> {
-                    int burnDmg = (int) (maxHP * 0.07);
+                    int burnDmg = (int) (maxHP * BURN_DAMAGE_PCT);
                     takeDamage(burnDmg);
                     message = String.format("🔥 %s takes %d burn damage! (HP: %d)",
                             name, burnDmg, hp);
@@ -152,7 +159,7 @@ public class AIDuel {
         }
 
         public SpecialResult useSpecial(Fighter target) {
-            if (random.nextDouble() >= 0.20) return null;
+            if (random.nextDouble() >= SPECIAL_TRIGGER_CHANCE) return null;
 
             return switch (fighterClass) {
                 case WARRIOR -> {
@@ -178,6 +185,11 @@ public class AIDuel {
             status = StatusEffect.NONE;
             statusDuration = 0;
         }
+
+        public void resetForNewMatch() {
+            resetForNewRound();
+            wins = 0;
+        }
     }
 
     record SpecialResult(String message, int extraDamage) {
@@ -185,9 +197,21 @@ public class AIDuel {
 
     public static void main(String[] args) {
 
-        Scanner scanner = new Scanner(System.in);
+        try (Scanner scanner = new Scanner(System.in)) {
 
-        printBanner();
+            printBanner();
+
+            boolean playAgain = true;
+            while (playAgain) {
+                runMatch(scanner);
+                playAgain = askPlayAgain(scanner);
+            }
+
+            System.out.println("\nThanks for playing! 👋");
+        }
+    }
+
+    static void runMatch(Scanner scanner) {
 
         Fighter botX = createFighter("⚙️  BotX", scanner);
         Fighter botZ = createFighter("🤖 BotZ", scanner);
@@ -197,14 +221,14 @@ public class AIDuel {
                 botX.getName(), botX.getFighterClass().label,
                 botZ.getName(), botZ.getFighterClass().label);
         System.out.println("═".repeat(50));
-        System.out.println("       First to " + TOTAL_ROUNDS + " wins takes the trophy!");
+        System.out.println("       First to " + WINS_NEEDED + " wins takes the trophy!");
         System.out.println("═".repeat(50));
 
         pause(scanner);
 
         int roundNumber = 1;
 
-        while (botX.getWins() < TOTAL_ROUNDS && botZ.getWins() < TOTAL_ROUNDS) {
+        while (botX.getWins() < WINS_NEEDED && botZ.getWins() < WINS_NEEDED) {
 
             System.out.println("\n" + "═".repeat(50));
             System.out.printf("  🥊 ROUND %d  |  Score: %s %d – %d %s%n",
@@ -227,7 +251,7 @@ public class AIDuel {
             pause(scanner);
         }
 
-        Fighter champion = botX.getWins() >= TOTAL_ROUNDS ? botX : botZ;
+        Fighter champion = botX.getWins() >= WINS_NEEDED ? botX : botZ;
 
         System.out.println("\n" + "═".repeat(50));
         System.out.println("  🏆 MATCH WINNER: " + champion.getName()
@@ -236,8 +260,6 @@ public class AIDuel {
                 botX.getName(), botX.getWins(),
                 botZ.getWins(), botZ.getName());
         System.out.println("═".repeat(50));
-
-        scanner.close();
     }
 
     static Fighter playRound(Fighter botX, Fighter botZ) {
@@ -292,7 +314,7 @@ public class AIDuel {
         int defense = defender.defend();
         boolean crit = random.nextDouble() < attacker.getFighterClass().critChance;
 
-        if (crit) rawAttack = (int) (rawAttack * 1.75);
+        if (crit) rawAttack = (int) (rawAttack * CRIT_MULTIPLIER);
 
         int damage = Math.max(1, rawAttack - defense);
         defender.takeDamage(damage);
@@ -324,29 +346,48 @@ public class AIDuel {
                     fc.dodgeChance * 100);
         }
 
-        int choice = 0;
-        while (choice < 1 || choice > classes.length) {
-            System.out.print("Enter choice (1-" + classes.length + "): ");
-            if (scanner.hasNextInt()) {
-                choice = scanner.nextInt();
-            } else {
-                scanner.next();
-            }
-        }
+        int choice = readIntInRange(scanner, "Enter choice (1-" + classes.length + "): ", 1, classes.length);
 
         return new Fighter(name, classes[choice - 1]);
     }
 
+    /**
+     * Reads an integer within [min, max], reprompting on invalid input.
+     * Also consumes the trailing newline so subsequent nextLine() calls behave predictably.
+     */
+    static int readIntInRange(Scanner scanner, String prompt, int min, int max) {
+        int value = -1;
+        while (value < min || value > max) {
+            System.out.print(prompt);
+            if (scanner.hasNextInt()) {
+                value = scanner.nextInt();
+                if (value < min || value > max) {
+                    System.out.println("  Please enter a number between " + min + " and " + max + ".");
+                }
+            } else {
+                System.out.println("  That's not a number, try again.");
+                scanner.next();
+            }
+        }
+        scanner.nextLine(); // consume leftover newline after nextInt()
+        return value;
+    }
+
+    static boolean askPlayAgain(Scanner scanner) {
+        System.out.print("\nPlay another match? (y/n): ");
+        String answer = scanner.nextLine().trim().toLowerCase();
+        return answer.startsWith("y");
+    }
+
     static void printHealth(Fighter fighter) {
 
-        int barLength = 20;
-        int filled = (int) ((double) fighter.getHP() / fighter.getMaxHP() * barLength);
+        int filled = (int) ((double) fighter.getHP() / fighter.getMaxHP() * HEALTH_BAR_LENGTH);
 
         String color = filled > 12 ? "🟩" : filled > 6 ? "🟨" : "🟥";
 
         StringBuilder bar = new StringBuilder();
         for (int i = 0; i < filled; i++) bar.append("█");
-        for (int i = filled; i < barLength; i++) bar.append("░");
+        for (int i = filled; i < HEALTH_BAR_LENGTH; i++) bar.append("░");
 
         String statusTag = switch (fighter.getStatus()) {
             case POISONED -> " ☠️ ";
@@ -374,6 +415,5 @@ public class AIDuel {
     static void pause(Scanner scanner) {
         System.out.print("\nPress Enter to continue...");
         scanner.nextLine();
-        if (scanner.hasNextLine()) scanner.nextLine();
     }
 }
