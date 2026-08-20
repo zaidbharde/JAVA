@@ -1,4 +1,3 @@
-// AudioMeter.java
 import javax.sound.sampled.*;
 
 public class AudioMeter {
