@@ -1,0 +1,1 @@
+public class MiniRotateArray { public static void main(String[] a) { int[] x={1,2,3,4}; int t=x[x.length-1]; System.arraycopy(x,0,x,1,x.length-1); x[0]=t; System.out.println(java.util.Arrays.toString(x)); } }
