@@ -1,44 +1,61 @@
-import javax.crypto.*;
-import javax.crypto.spec.*;
-import java.security.*;
-import java.util.*;
+import javax.crypto.Cipher;
+import javax.crypto.SecretKey;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.PBEKeySpec;
+import javax.crypto.spec.SecretKeySpec;
+import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 public class PasswordManager {
 
+    private static final int GCM_NONCE_LENGTH = 12;
+    private static final int GCM_TAG_LENGTH_BITS = 128;
+    private static final SecureRandom RANDOM = new SecureRandom();
+
     private final Map<String, Entry> vault = new LinkedHashMap<>();
     private final SecretKey key;
-    private final byte[] iv;
 
-    record Entry(String site, String username, byte[] encryptedPassword, long created) {}
+    record Entry(String site, String username, byte[] nonce,
+                 byte[] encryptedPassword, long created) {}
 
     public PasswordManager(String masterPassword) throws Exception {
-        byte[] salt = "fixed-salt-demo".getBytes();
+        byte[] salt = new byte[16];
+        RANDOM.nextBytes(salt);
         SecretKeyFactory factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
-        KeySpec spec = new PBEKeySpec(masterPassword.toCharArray(), salt, 65536, 256);
-        key = new SecretKeySpec(factory.generateSecret(spec).getEncoded(), "AES");
-        iv = Arrays.copyOf(salt, 16);
+        PBEKeySpec spec = new PBEKeySpec(masterPassword.toCharArray(), salt, 65536, 256);
+        byte[] derived = factory.generateSecret(spec).getEncoded();
+        spec.clearPassword();
+        key = new SecretKeySpec(derived, "AES");
     }
 
-    private byte[] encrypt(String plaintext) throws Exception {
-        Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
-        cipher.init(Cipher.ENCRYPT_MODE, key, new IvParameterSpec(iv));
-        return cipher.doFinal(plaintext.getBytes());
+    private byte[] encrypt(String plaintext, byte[] nonce) throws Exception {
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_LENGTH_BITS, nonce));
+        return cipher.doFinal(plaintext.getBytes(StandardCharsets.UTF_8));
     }
 
-    private String decrypt(byte[] ciphertext) throws Exception {
-        Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
-        cipher.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(iv));
-        return new String(cipher.doFinal(ciphertext));
+    private String decrypt(byte[] ciphertext, byte[] nonce) throws Exception {
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_LENGTH_BITS, nonce));
+        return new String(cipher.doFinal(ciphertext), StandardCharsets.UTF_8);
     }
 
     public void store(String site, String username, String password) throws Exception {
-        vault.put(site, new Entry(site, username, encrypt(password), System.currentTimeMillis()));
+        byte[] nonce = new byte[GCM_NONCE_LENGTH];
+        RANDOM.nextBytes(nonce);
+        vault.put(site, new Entry(site, username, nonce, encrypt(password, nonce), System.currentTimeMillis()));
     }
 
     public String retrieve(String site) throws Exception {
         Entry entry = vault.get(site);
         if (entry == null) return null;
-        return decrypt(entry.encryptedPassword);
+        return decrypt(entry.encryptedPassword, entry.nonce);
     }
 
     public void delete(String site) {
@@ -88,7 +105,7 @@ public class PasswordManager {
         System.out.println("  Password Manager");
         System.out.println("=".repeat(50));
 
-        PasswordManager pm = new PasswordManager("my-master-key-123");
+        PasswordManager pm = new PasswordManager(generate(32, true));
 
         pm.store("github.com",   "alice",   "MyGitP@ss123");
         pm.store("google.com",   "alice42", "G00gl3!Secure");

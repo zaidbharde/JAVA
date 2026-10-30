@@ -12,6 +12,9 @@ public final class CsvRowValidator {
 
     public static Result validate(String row, int expectedColumns, int integerColumn) {
         if (expectedColumns < 1) throw new IllegalArgumentException("columns must be positive");
+        if (integerColumn < -1 || integerColumn >= expectedColumns) {
+            throw new IllegalArgumentException("integer column must be -1 or a valid column index");
+        }
         List<String> values = split(row);
         List<Issue> issues = new ArrayList<>();
         if (values.size() != expectedColumns) {
@@ -27,16 +30,41 @@ public final class CsvRowValidator {
     }
 
     private static List<String> split(String row) {
+        if (row == null) throw new IllegalArgumentException("row cannot be null");
         List<String> fields = new ArrayList<>();
         StringBuilder current = new StringBuilder();
         boolean quoted = false;
+        boolean closedQuote = false;
         for (int i = 0; i < row.length(); i++) {
             char c = row.charAt(i);
-            if (c == '"') quoted = !quoted;
-            else if (c == ',' && !quoted) { fields.add(current.toString().trim()); current.setLength(0); }
-            else current.append(c);
+            if (quoted) {
+                if (c == '"') {
+                    if (i + 1 < row.length() && row.charAt(i + 1) == '"') {
+                        current.append('"');
+                        i++;
+                    } else {
+                        quoted = false;
+                        closedQuote = true;
+                    }
+                } else current.append(c);
+            } else if (c == ',') {
+                fields.add(current.toString().trim());
+                current.setLength(0);
+                closedQuote = false;
+            } else if (c == '"') {
+                if (current.toString().isBlank() && !closedQuote) {
+                    current.setLength(0);
+                    quoted = true;
+                } else throw new IllegalArgumentException("quote inside unquoted field");
+            } else {
+                if (closedQuote && !Character.isWhitespace(c)) {
+                    throw new IllegalArgumentException("characters after closing quote");
+                }
+                if (!closedQuote) current.append(c);
+            }
         }
-        if (quoted) fields.add("<unterminated quote>"); else fields.add(current.toString().trim());
+        if (quoted) throw new IllegalArgumentException("unterminated quoted field");
+        fields.add(current.toString().trim());
         return fields;
     }
 }

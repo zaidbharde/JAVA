@@ -229,4 +229,10 @@ public class RegexEngine {
                 if (s.position > i || i == input.length()) {
                     var groups = new HashMap<>(s.groups);
                     groups.put(0, input.substring(i, s.position));
-                    return 
+                    return Optional.of(groups);
+                }
+            }
+        }
+        return Optional.empty();
+    }
+}

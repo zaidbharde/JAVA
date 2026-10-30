@@ -358,6 +358,7 @@ public class MiniRegex {
 
         int current = pos;
         int count = 0;
+        boolean zeroWidthMatch = false;
 
         while (max < 0 || count < max) {
             int next;
@@ -367,12 +368,21 @@ public class MiniRegex {
                 next = advanceSingle(unit[0], text, current);
             }
             if (next == -1) break;
+            if (next == current) {
+                zeroWidthMatch = true;
+                break;
+            }
             positions.add(next);
             current = next;
             count++;
         }
 
-        if (count < min) return null;
+        if (count < min) {
+            if (zeroWidthMatch && (max < 0 || max >= min)) {
+                return matchTokens(after, 0, text, current);
+            }
+            return null;
+        }
 
         for (int k = positions.size() - 1; k >= min; k--) {
             int[] res = matchTokens(after, 0, text, positions.get(k));
