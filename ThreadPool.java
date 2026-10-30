@@ -43,6 +43,7 @@ public class ThreadPool {
     // ── Pool ──────────────────────────────────────────────────────────
     private final List<Worker>             workers;
     private final BlockingQueue<Runnable>  taskQueue;
+    private final Object                   lifecycleLock = new Object();
     private final AtomicInteger            submitted  = new AtomicInteger();
     private final AtomicInteger            completed  = new AtomicInteger();
     private       boolean                  isShutdown = false;
@@ -61,32 +62,38 @@ public class ThreadPool {
     }
 
     public Future<?> submit(Runnable task) {
-        if (isShutdown)
-            throw new RejectedExecutionException("Pool is shut down.");
-
         FutureTask<?> ft = new FutureTask<>(task, null);
-        if (!taskQueue.offer(ft)) {
-            throw new RejectedExecutionException("Task queue is full.");
+        synchronized (lifecycleLock) {
+            if (isShutdown)
+                throw new RejectedExecutionException("Pool is shut down.");
+            submitted.incrementAndGet();
+            if (!taskQueue.offer(ft)) {
+                submitted.decrementAndGet();
+                throw new RejectedExecutionException("Task queue is full.");
+            }
         }
-        submitted.incrementAndGet();
         return ft;
     }
 
     public <T> Future<T> submit(Callable<T> task) {
-        if (isShutdown)
-            throw new RejectedExecutionException("Pool is shut down.");
-
         FutureTask<T> ft = new FutureTask<>(task);
-        if (!taskQueue.offer(ft)) {
-            throw new RejectedExecutionException("Task queue is full.");
+        synchronized (lifecycleLock) {
+            if (isShutdown)
+                throw new RejectedExecutionException("Pool is shut down.");
+            submitted.incrementAndGet();
+            if (!taskQueue.offer(ft)) {
+                submitted.decrementAndGet();
+                throw new RejectedExecutionException("Task queue is full.");
+            }
         }
-        submitted.incrementAndGet();
         return ft;
     }
 
     public void shutdown() throws InterruptedException {
-        isShutdown = true;
-        for (Worker w : workers) w.shutdown();
+        synchronized (lifecycleLock) {
+            isShutdown = true;
+            for (Worker w : workers) w.shutdown();
+        }
         for (Worker w : workers) w.join();
         System.out.println("  ThreadPool shut down.");
     }
