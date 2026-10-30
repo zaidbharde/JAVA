@@ -2,6 +2,7 @@ import java.io.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.stream.*;
+import java.util.Locale;
 
 /**
  * File Word Counter — reads a text file and reports word frequency,
@@ -11,11 +12,13 @@ public class FileWordCounter {
 
     // ── Analysis ──────────────────────────────────────────────────────
     public static Map<String, Long> countWords(String filePath) throws IOException {
-        return Files.lines(Path.of(filePath))
+        try (Stream<String> lines = Files.lines(Path.of(filePath))) {
+            return lines
             .flatMap(line -> Arrays.stream(line.split("[^a-zA-Z]+")))
             .filter(w -> !w.isBlank())
-            .map(String::toLowerCase)
+            .map(w -> w.toLowerCase(Locale.ROOT))
             .collect(Collectors.groupingBy(w -> w, Collectors.counting()));
+        }
     }
 
     public static void printReport(Map<String, Long> freq, int topN) {
