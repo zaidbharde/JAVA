@@ -2,7 +2,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
-/** Sparse integer matrix backed by one column-to-value map per row. */
+/** Sparse integer matrix backed by row maps; arithmetic throws on int overflow. */
 public final class SparseMatrixOps {
     private final int rowCount;
     private final int columnCount;
@@ -59,7 +59,7 @@ public final class SparseMatrixOps {
             result.rows[row].putAll(rows[row]);
             for (Map.Entry<Integer, Integer> entry : other.rows[row].entrySet()) {
                 int column = entry.getKey();
-                int sum = result.rows[row].getOrDefault(column, 0) + entry.getValue();
+                int sum = Math.addExact(result.rows[row].getOrDefault(column, 0), entry.getValue());
                 if (sum == 0) result.rows[row].remove(column);
                 else result.rows[row].put(column, sum);
             }
@@ -78,7 +78,8 @@ public final class SparseMatrixOps {
             for (Map.Entry<Integer, Integer> left : rows[row].entrySet()) {
                 for (Map.Entry<Integer, Integer> right : other.rows[left.getKey()].entrySet()) {
                     int column = right.getKey();
-                    int value = output.getOrDefault(column, 0) + left.getValue() * right.getValue();
+                    int product = Math.multiplyExact(left.getValue(), right.getValue());
+                    int value = Math.addExact(output.getOrDefault(column, 0), product);
                     if (value == 0) output.remove(column);
                     else output.put(column, value);
                 }

@@ -8,6 +8,7 @@ public final class SparseMatrixOpsTest {
         testEmptyDimensions();
         testAdditionAndCancellation();
         testSparseMultiplication();
+        testOverflowIsReported();
         testDenseReferenceCases();
         testInvalidInputs();
         System.out.println("SparseMatrixOpsTest: PASS (" + assertions + " assertions)");
@@ -47,6 +48,28 @@ public final class SparseMatrixOpsTest {
         matrixEquals(new int[][] {{0, 16}, {15, 0}}, a.multiply(b).toDense(), "sparse product");
         expect(IllegalArgumentException.class,
                 () -> a.multiply(new SparseMatrixOps(2, 1)), "multiplication shape mismatch");
+    }
+
+    private static void testOverflowIsReported() {
+        SparseMatrixOps max = new SparseMatrixOps(1, 1);
+        SparseMatrixOps one = new SparseMatrixOps(1, 1);
+        max.set(0, 0, Integer.MAX_VALUE);
+        one.set(0, 0, 1);
+        expect(ArithmeticException.class, () -> max.add(one), "addition overflow");
+
+        SparseMatrixOps left = new SparseMatrixOps(1, 1);
+        SparseMatrixOps right = new SparseMatrixOps(1, 1);
+        left.set(0, 0, Integer.MAX_VALUE);
+        right.set(0, 0, 2);
+        expect(ArithmeticException.class, () -> left.multiply(right), "product overflow");
+
+        SparseMatrixOps terms = new SparseMatrixOps(1, 2);
+        SparseMatrixOps factors = new SparseMatrixOps(2, 1);
+        terms.set(0, 0, Integer.MAX_VALUE);
+        terms.set(0, 1, 1);
+        factors.set(0, 0, 1);
+        factors.set(1, 0, 1);
+        expect(ArithmeticException.class, () -> terms.multiply(factors), "accumulated product overflow");
     }
 
     private static void testDenseReferenceCases() {
